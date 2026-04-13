@@ -1,0 +1,16 @@
+# Dependencias para Sistema de Detección YOLOv8
+# Optimizado para concursos
+
+# YOLOv8
+ultralytics>=8.0.0
+
+# Procesamiento de imágenes
+opencv-python>=4.8.0
+
+# Deep Learning
+torch>=2.0.0
+torchvision>=0.15.0
+
+# Utilidades
+PyYAML>=6.0
+numpy>=1.24.0

@@ -1,0 +1,12 @@
+# Carpetas de Datasets y Resultados
+/claude_dataset/
+/claude_dataset_2/
+/runs/
+/yolo_dataset/
+/yolo_dataset_key/
+
+# Scripts de automatización y entrenamiento
+# (Usamos el nombre directo si están en la raíz)
+auto_etiquetar_y_entrenar.py
+EJECUTAR_TODO.py
+label_keys.py
