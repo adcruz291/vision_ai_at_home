@@ -15,6 +15,15 @@ def imgmsg_to_frame(msg: Image) -> np.ndarray:
     return frame.copy()
 
 
+def asignar_casilla(x_center: float, frame_width: int, num_casillas: int) -> int:
+    """
+    Divide el frame en num_casillas zonas iguales y devuelve
+    en cual zona cae x_center (0 = izquierda, num_casillas-1 = derecha).
+    """
+    zona = int(x_center / frame_width * num_casillas)
+    return min(zona, num_casillas - 1)  # clamp por si x_center == frame_width
+
+
 class State(Enum):
     IDLE               = 'IDLE'
     WAITING_NAVIGATION = 'WAITING_NAVIGATION'
@@ -26,21 +35,25 @@ class ObjectRecognitionNode(Node):
         super().__init__('object_recognition_node')
 
         # --- Parámetros ---
-        self.declare_parameter('model_path', 'yolov8n.pt')
-        self.declare_parameter('confidence', 0.5)
+        self.declare_parameter('model_path',   'yolov8n.pt')
+        self.declare_parameter('confidence',   0.5)
+        self.declare_parameter('num_casillas', 3)
 
-        model_path      = self.get_parameter('model_path').value
-        self.confidence = self.get_parameter('confidence').value
+        model_path          = self.get_parameter('model_path').value
+        self.confidence     = self.get_parameter('confidence').value
+        self.num_casillas   = self.get_parameter('num_casillas').value
 
         # --- Cargar modelo YOLO una sola vez ---
         self.get_logger().info(f'Cargando modelo YOLO: {model_path}')
         self.model = YOLO(model_path)
         self.get_logger().info('Modelo YOLO cargado correctamente')
+        self.get_logger().info(f'Casillas configuradas: {self.num_casillas}')
 
         # --- Estado interno ---
         self.state         = State.IDLE
-        self.target_object = None   # objeto pedido por speech
-        self.latest_frame  = None   # frame mas reciente de la camara
+        self.target_object = None
+        self.latest_frame  = None
+        self.frame_width   = None   # se detecta del primer frame recibido
 
         # --- Subscripciones ---
         self.create_subscription(
@@ -51,7 +64,12 @@ class ObjectRecognitionNode(Node):
             Image,  '/camera/image_raw', self.cb_camera,        10)
 
         # --- Publicador ---
-        # JSON: {"target_object": "key", "objects": ["telefono","key"], "target_index": 1, "confidence_scores": [0.9, 0.87]}
+        # JSON: {
+        #   "target_object": "key",
+        #   "slots": ["telefono", "", "key"],   <- índice = casilla absoluta
+        #   "target_index": 2,                  <- casilla donde está el target (-1 si no se encontró)
+        #   "confidence_scores": {"0": 0.92, "2": 0.87}
+        # }
         self.pub = self.create_publisher(String, '/detected_objects', 10)
 
         self.get_logger().info('ObjectRecognitionNode listo — Estado: IDLE')
@@ -63,6 +81,12 @@ class ObjectRecognitionNode(Node):
     def cb_camera(self, msg: Image):
         """Actualiza silenciosamente el frame mas reciente."""
         self.latest_frame = imgmsg_to_frame(msg)
+        if self.frame_width is None:
+            self.frame_width = msg.width
+            self.get_logger().info(
+                f'Frame detectado: {msg.width}x{msg.height} — '
+                f'cada casilla abarca {msg.width // self.num_casillas}px'
+            )
 
     def cb_target_object(self, msg: String):
         """Recibe el objeto a buscar desde speech_one."""
@@ -83,7 +107,7 @@ class ObjectRecognitionNode(Node):
     def cb_got_target(self, msg: Bool):
         """Recibe confirmacion del sistema de navegacion."""
         if not msg.data:
-            return  # ignorar False
+            return
 
         if self.state != State.WAITING_NAVIGATION:
             self.get_logger().warn(
@@ -102,7 +126,7 @@ class ObjectRecognitionNode(Node):
     # ------------------------------------------------------------------
 
     def _run_detection(self):
-        if self.latest_frame is None:
+        if self.latest_frame is None or self.frame_width is None:
             self.get_logger().error(
                 'No hay frame de camara disponible. Regresando a IDLE.'
             )
@@ -111,53 +135,59 @@ class ObjectRecognitionNode(Node):
 
         results = self.model(self.latest_frame, conf=self.confidence, verbose=False)
 
-        # Extraer detecciones y ordenar de izquierda a derecha por x_center
-        detections = []
+        # Construir array de casillas fijas (vacías por defecto)
+        slots       = [''] * self.num_casillas   # casilla vacía = ""
+        confs       = [0.0] * self.num_casillas
+        target_index = -1
+
         for box in results[0].boxes:
             x1, _, x2, _ = box.xyxy[0].tolist()
             class_id   = int(box.cls[0])
             class_name = self.model.names[class_id]
             conf       = float(box.conf[0])
             x_center   = (x1 + x2) / 2.0
-            detections.append((x_center, class_name, conf))
 
-        detections.sort(key=lambda d: d[0])  # izquierda → derecha
+            casilla = asignar_casilla(x_center, self.frame_width, self.num_casillas)
 
-        objects     = [d[1] for d in detections]
-        confidences = [d[2] for d in detections]
+            # Si dos objetos caen en la misma casilla, gana el de mayor confianza
+            if slots[casilla] == '' or conf > confs[casilla]:
+                slots[casilla] = class_name
+                confs[casilla] = conf
 
-        # Buscar el indice del objeto solicitado
-        target_index = -1
-        for i, name in enumerate(objects):
-            if name.lower() == self.target_object:
+        # Buscar casilla del target
+        for i, nombre in enumerate(slots):
+            if nombre.lower() == self.target_object:
                 target_index = i
                 break
 
-        # Log resultado — mostrar cada casilla explicitamente
-        if objects:
-            self.get_logger().info(f'--- Deteccion completa: {len(objects)} objeto(s) ---')
-            for i, (name, conf) in enumerate(zip(objects, confidences)):
+        # Log resultado — mostrar todas las casillas
+        self.get_logger().info(
+            f'--- Deteccion completa ({self.num_casillas} casillas) ---'
+        )
+        for i in range(self.num_casillas):
+            if slots[i]:
                 marker = ' ← TARGET' if i == target_index else ''
                 self.get_logger().info(
-                    f'  Casilla {i}: "{name}" (conf: {conf:.2f}){marker}'
-                )
-            if target_index >= 0:
-                self.get_logger().info(
-                    f'"{self.target_object}" encontrado en casilla {target_index}'
+                    f'  Casilla {i}: "{slots[i]}" (conf: {confs[i]:.2f}){marker}'
                 )
             else:
-                self.get_logger().warn(
-                    f'"{self.target_object}" NO encontrado entre los objetos detectados'
-                )
-        else:
-            self.get_logger().warn('No se detecto ningun objeto en el frame')
+                self.get_logger().info(f'  Casilla {i}: (vacia)')
 
-        # Publicar resultado como JSON
+        if target_index >= 0:
+            self.get_logger().info(
+                f'"{self.target_object}" encontrado en casilla {target_index}'
+            )
+        else:
+            self.get_logger().warn(
+                f'"{self.target_object}" NO encontrado en ninguna casilla'
+            )
+
+        # Publicar resultado
         payload = {
-            'target_object':     self.target_object,
-            'objects':           objects,
-            'target_index':      target_index,
-            'confidence_scores': confidences,
+            'target_object': self.target_object,
+            'slots':         slots,         # lista de num_casillas, "" = vacia
+            'target_index':  target_index,  # -1 si no se encontró
+            'confidence_scores': confs,
         }
         out = String()
         out.data = json.dumps(payload)

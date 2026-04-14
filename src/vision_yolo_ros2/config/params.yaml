@@ -9,3 +9,4 @@ object_recognition_node:
   ros__parameters:
     model_path: "yolov8n.pt"
     confidence: 0.5
+    num_casillas: 3
