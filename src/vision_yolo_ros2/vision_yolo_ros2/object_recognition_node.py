@@ -1,6 +1,7 @@
 import json
 from enum import Enum
 
+import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -35,13 +36,15 @@ class ObjectRecognitionNode(Node):
         super().__init__('object_recognition_node')
 
         # --- Parámetros ---
-        self.declare_parameter('model_path',   'yolov8n.pt')
-        self.declare_parameter('confidence',   0.5)
-        self.declare_parameter('num_casillas', 3)
+        self.declare_parameter('model_path',      'yolov8n.pt')
+        self.declare_parameter('confidence',      0.5)
+        self.declare_parameter('num_casillas',    3)
+        self.declare_parameter('show_detection',  True)   # ventana con detecciones YOLO
 
-        model_path          = self.get_parameter('model_path').value
-        self.confidence     = self.get_parameter('confidence').value
-        self.num_casillas   = self.get_parameter('num_casillas').value
+        model_path               = self.get_parameter('model_path').value
+        self.confidence          = self.get_parameter('confidence').value
+        self.num_casillas        = self.get_parameter('num_casillas').value
+        self.show_detection      = self.get_parameter('show_detection').value
 
         # --- Cargar modelo YOLO una sola vez ---
         self.get_logger().info(f'Cargando modelo YOLO: {model_path}')
@@ -134,6 +137,12 @@ class ObjectRecognitionNode(Node):
             return
 
         results = self.model(self.latest_frame, conf=self.confidence, verbose=False)
+
+        # Mostrar frame anotado con las detecciones de YOLO
+        if self.show_detection:
+            annotated = results[0].plot()   # dibuja bboxes y labels sobre el frame
+            cv2.imshow('Deteccion YOLO', annotated)
+            cv2.waitKey(1)
 
         # Construir array de casillas fijas (vacías por defecto)
         slots       = [''] * self.num_casillas   # casilla vacía = ""

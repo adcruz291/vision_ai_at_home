@@ -1,12 +1,14 @@
 camera_publisher_node:
   ros__parameters:
-    camera_index: 0
+    camera_index: 2        # 0 = camara laptop, 2 = camara USB externa (ajusta si es necesario)
     fps: 30
     width: 640
     height: 480
+    show_preview: true     # muestra ventana con feed en vivo de la camara
 
 object_recognition_node:
   ros__parameters:
     model_path: "yolov8n.pt"
     confidence: 0.5
     num_casillas: 3
+    show_detection: true   # muestra ventana con bboxes de YOLO al detectar
