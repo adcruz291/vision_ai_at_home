@@ -22,7 +22,7 @@ def asignar_casilla(x_center: float, frame_width: int, num_casillas: int) -> int
     en cual zona cae x_center (0 = izquierda, num_casillas-1 = derecha).
     """
     zona = int(x_center / frame_width * num_casillas)
-    return min(zona, num_casillas - 1)  # clamp por si x_center == frame_width
+    return min(zona, num_casillas - 1)
 
 
 class State(Enum):
@@ -36,15 +36,15 @@ class ObjectRecognitionNode(Node):
         super().__init__('object_recognition_node')
 
         # --- Parámetros ---
-        self.declare_parameter('model_path',      'yolov8n.pt')
-        self.declare_parameter('confidence',      0.5)
-        self.declare_parameter('num_casillas',    3)
-        self.declare_parameter('show_detection',  True)   # ventana con detecciones YOLO
+        self.declare_parameter('model_path',     'yolov8n.pt')
+        self.declare_parameter('confidence',     0.5)
+        self.declare_parameter('num_casillas',   3)
+        self.declare_parameter('show_detection', True)
 
-        model_path               = self.get_parameter('model_path').value
-        self.confidence          = self.get_parameter('confidence').value
-        self.num_casillas        = self.get_parameter('num_casillas').value
-        self.show_detection      = self.get_parameter('show_detection').value
+        model_path            = self.get_parameter('model_path').value
+        self.confidence       = self.get_parameter('confidence').value
+        self.num_casillas     = self.get_parameter('num_casillas').value
+        self.show_detection   = self.get_parameter('show_detection').value
 
         # --- Cargar modelo YOLO una sola vez ---
         self.get_logger().info(f'Cargando modelo YOLO: {model_path}')
@@ -53,10 +53,11 @@ class ObjectRecognitionNode(Node):
         self.get_logger().info(f'Casillas configuradas: {self.num_casillas}')
 
         # --- Estado interno ---
-        self.state         = State.IDLE
-        self.target_object = None
-        self.latest_frame  = None
-        self.frame_width   = None   # se detecta del primer frame recibido
+        self.state            = State.IDLE
+        self.target_object    = None
+        self.latest_frame     = None
+        self.frame_width      = None
+        self.annotated_frame  = None   # último frame con bboxes para mostrar en pantalla
 
         # --- Subscripciones ---
         self.create_subscription(
@@ -67,15 +68,30 @@ class ObjectRecognitionNode(Node):
             Image,  '/camera/image_raw', self.cb_camera,        10)
 
         # --- Publicador ---
-        # JSON: {
-        #   "target_object": "key",
-        #   "slots": ["telefono", "", "key"],   <- índice = casilla absoluta
-        #   "target_index": 2,                  <- casilla donde está el target (-1 si no se encontró)
-        #   "confidence_scores": {"0": 0.92, "2": 0.87}
-        # }
+        # JSON: {"target_object": "key", "slots": ["telefono","","key"],
+        #        "target_index": 2, "confidence_scores": [0.92, 0.0, 0.87]}
         self.pub = self.create_publisher(String, '/detected_objects', 10)
 
+        # --- Timer para refrescar la ventana de detección (10 Hz) ---
+        # cv2.imshow necesita waitKey periódico para no congelarse
+        if self.show_detection:
+            cv2.namedWindow('Deteccion YOLO', cv2.WINDOW_NORMAL)
+            self.create_timer(0.1, self.refresh_detection_window)
+            self.get_logger().info(
+                'Ventana de deteccion activada — se mostrara al detectar'
+            )
+
         self.get_logger().info('ObjectRecognitionNode listo — Estado: IDLE')
+
+    # ------------------------------------------------------------------
+    # Timer de refresco de ventana
+    # ------------------------------------------------------------------
+
+    def refresh_detection_window(self):
+        """Refresca la ventana de detección a 10Hz para mantenerla responsiva."""
+        if self.annotated_frame is not None:
+            cv2.imshow('Deteccion YOLO', self.annotated_frame)
+        cv2.waitKey(1)
 
     # ------------------------------------------------------------------
     # Callbacks
@@ -138,15 +154,13 @@ class ObjectRecognitionNode(Node):
 
         results = self.model(self.latest_frame, conf=self.confidence, verbose=False)
 
-        # Mostrar frame anotado con las detecciones de YOLO
+        # Guardar frame anotado — el timer lo mostrará en pantalla
         if self.show_detection:
-            annotated = results[0].plot()   # dibuja bboxes y labels sobre el frame
-            cv2.imshow('Deteccion YOLO', annotated)
-            cv2.waitKey(1)
+            self.annotated_frame = results[0].plot()
 
         # Construir array de casillas fijas (vacías por defecto)
-        slots       = [''] * self.num_casillas   # casilla vacía = ""
-        confs       = [0.0] * self.num_casillas
+        slots        = [''] * self.num_casillas
+        confs        = [0.0] * self.num_casillas
         target_index = -1
 
         for box in results[0].boxes:
@@ -169,13 +183,13 @@ class ObjectRecognitionNode(Node):
                 target_index = i
                 break
 
-        # Log resultado — mostrar todas las casillas
+        # Log resultado
         self.get_logger().info(
             f'--- Deteccion completa ({self.num_casillas} casillas) ---'
         )
         for i in range(self.num_casillas):
             if slots[i]:
-                marker = ' ← TARGET' if i == target_index else ''
+                marker = ' <- TARGET' if i == target_index else ''
                 self.get_logger().info(
                     f'  Casilla {i}: "{slots[i]}" (conf: {confs[i]:.2f}){marker}'
                 )
@@ -193,9 +207,9 @@ class ObjectRecognitionNode(Node):
 
         # Publicar resultado
         payload = {
-            'target_object': self.target_object,
-            'slots':         slots,         # lista de num_casillas, "" = vacia
-            'target_index':  target_index,  # -1 si no se encontró
+            'target_object':     self.target_object,
+            'slots':             slots,
+            'target_index':      target_index,
             'confidence_scores': confs,
         }
         out = String()
@@ -208,6 +222,10 @@ class ObjectRecognitionNode(Node):
         self.state         = State.IDLE
         self.target_object = None
         self.get_logger().info('Estado: IDLE — Listo para nuevo ciclo.')
+
+    def destroy_node(self):
+        cv2.destroyAllWindows()
+        super().destroy_node()
 
 
 def main(args=None):
