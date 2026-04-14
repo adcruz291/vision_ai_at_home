@@ -1,8 +1,21 @@
+import numpy as np
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
-from cv_bridge import CvBridge
 import cv2
+
+
+def frame_to_imgmsg(frame, stamp):
+    """Convierte un frame OpenCV (BGR) a sensor_msgs/Image sin usar cv_bridge."""
+    msg = Image()
+    msg.header.stamp = stamp
+    msg.height       = frame.shape[0]
+    msg.width        = frame.shape[1]
+    msg.encoding     = 'bgr8'
+    msg.is_bigendian = 0
+    msg.step         = frame.shape[1] * frame.shape[2]
+    msg.data         = frame.tobytes()
+    return msg
 
 
 class CameraPublisherNode(Node):
@@ -19,7 +32,6 @@ class CameraPublisherNode(Node):
         width   = self.get_parameter('width').value
         height  = self.get_parameter('height').value
 
-        self.bridge = CvBridge()
         self.publisher = self.create_publisher(Image, '/camera/image_raw', 10)
 
         self.cap = cv2.VideoCapture(cam_idx)
@@ -42,8 +54,7 @@ class CameraPublisherNode(Node):
             self.get_logger().warn('No se pudo leer frame de la camara')
             return
 
-        msg = self.bridge.cv2_to_imgmsg(frame, encoding='bgr8')
-        msg.header.stamp = self.get_clock().now().to_msg()
+        msg = frame_to_imgmsg(frame, self.get_clock().now().to_msg())
         self.publisher.publish(msg)
 
     def destroy_node(self):

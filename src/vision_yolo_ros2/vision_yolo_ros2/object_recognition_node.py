@@ -1,12 +1,18 @@
 import json
 from enum import Enum
 
+import numpy as np
 import rclpy
 from rclpy.node import Node
 from std_msgs.msg import String, Bool
 from sensor_msgs.msg import Image
-from cv_bridge import CvBridge
 from ultralytics import YOLO
+
+
+def imgmsg_to_frame(msg: Image) -> np.ndarray:
+    """Convierte sensor_msgs/Image a numpy array (BGR) sin usar cv_bridge."""
+    frame = np.frombuffer(msg.data, dtype=np.uint8).reshape(msg.height, msg.width, -1)
+    return frame.copy()
 
 
 class State(Enum):
@@ -23,8 +29,8 @@ class ObjectRecognitionNode(Node):
         self.declare_parameter('model_path', 'yolov8n.pt')
         self.declare_parameter('confidence', 0.5)
 
-        model_path       = self.get_parameter('model_path').value
-        self.confidence  = self.get_parameter('confidence').value
+        model_path      = self.get_parameter('model_path').value
+        self.confidence = self.get_parameter('confidence').value
 
         # --- Cargar modelo YOLO una sola vez ---
         self.get_logger().info(f'Cargando modelo YOLO: {model_path}')
@@ -32,21 +38,20 @@ class ObjectRecognitionNode(Node):
         self.get_logger().info('Modelo YOLO cargado correctamente')
 
         # --- Estado interno ---
-        self.state          = State.IDLE
-        self.target_object  = None   # objeto pedido por speech
-        self.latest_frame   = None   # frame mas reciente de la camara
-        self.bridge         = CvBridge()
+        self.state         = State.IDLE
+        self.target_object = None   # objeto pedido por speech
+        self.latest_frame  = None   # frame mas reciente de la camara
 
         # --- Subscripciones ---
         self.create_subscription(
-            String, '/target_object', self.cb_target_object, 10)
+            String, '/target_object',    self.cb_target_object, 10)
         self.create_subscription(
-            Bool,   '/got_target',    self.cb_got_target,    10)
+            Bool,   '/got_target',       self.cb_got_target,    10)
         self.create_subscription(
-            Image,  '/camera/image_raw', self.cb_camera,     10)
+            Image,  '/camera/image_raw', self.cb_camera,        10)
 
         # --- Publicador ---
-        # Publica JSON: {"target_object": "key", "objects": ["telefono","key"], "target_index": 1, "confidence_scores": [0.9, 0.87]}
+        # JSON: {"target_object": "key", "objects": ["telefono","key"], "target_index": 1, "confidence_scores": [0.9, 0.87]}
         self.pub = self.create_publisher(String, '/detected_objects', 10)
 
         self.get_logger().info('ObjectRecognitionNode listo — Estado: IDLE')
@@ -57,7 +62,7 @@ class ObjectRecognitionNode(Node):
 
     def cb_camera(self, msg: Image):
         """Actualiza silenciosamente el frame mas reciente."""
-        self.latest_frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        self.latest_frame = imgmsg_to_frame(msg)
 
     def cb_target_object(self, msg: String):
         """Recibe el objeto a buscar desde speech_one."""
@@ -104,8 +109,7 @@ class ObjectRecognitionNode(Node):
             self._reset()
             return
 
-        frame = self.latest_frame.copy()
-        results = self.model(frame, conf=self.confidence, verbose=False)
+        results = self.model(self.latest_frame, conf=self.confidence, verbose=False)
 
         # Extraer detecciones y ordenar de izquierda a derecha por x_center
         detections = []
@@ -122,7 +126,7 @@ class ObjectRecognitionNode(Node):
         objects     = [d[1] for d in detections]
         confidences = [d[2] for d in detections]
 
-        # Buscar el índice del objeto solicitado
+        # Buscar el indice del objeto solicitado
         target_index = -1
         for i, name in enumerate(objects):
             if name.lower() == self.target_object:
@@ -131,30 +135,28 @@ class ObjectRecognitionNode(Node):
 
         # Log resultado
         if objects:
-            self.get_logger().info(
-                f'Objetos detectados (izq→der): {objects}'
-            )
+            self.get_logger().info(f'Objetos detectados (izq→der): {objects}')
             if target_index >= 0:
                 self.get_logger().info(
                     f'"{self.target_object}" encontrado en casilla {target_index}'
                 )
             else:
                 self.get_logger().warn(
-                    f'"{self.target_object}" NO fue encontrado entre los objetos detectados'
+                    f'"{self.target_object}" NO encontrado entre los objetos detectados'
                 )
         else:
             self.get_logger().warn('No se detecto ningun objeto en el frame')
 
-        # Publicar resultado como JSON en std_msgs/String
+        # Publicar resultado como JSON
         payload = {
             'target_object':     self.target_object,
-            'objects':           objects,           # ordenados izq→der
-            'target_index':      target_index,      # -1 si no se encontró
+            'objects':           objects,
+            'target_index':      target_index,
             'confidence_scores': confidences,
         }
-        msg = String()
-        msg.data = json.dumps(payload)
-        self.pub.publish(msg)
+        out = String()
+        out.data = json.dumps(payload)
+        self.pub.publish(out)
 
         self._reset()
 
