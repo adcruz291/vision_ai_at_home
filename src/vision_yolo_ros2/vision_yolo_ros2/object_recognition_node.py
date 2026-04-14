@@ -133,9 +133,14 @@ class ObjectRecognitionNode(Node):
                 target_index = i
                 break
 
-        # Log resultado
+        # Log resultado — mostrar cada casilla explicitamente
         if objects:
-            self.get_logger().info(f'Objetos detectados (izq→der): {objects}')
+            self.get_logger().info(f'--- Deteccion completa: {len(objects)} objeto(s) ---')
+            for i, (name, conf) in enumerate(zip(objects, confidences)):
+                marker = ' ← TARGET' if i == target_index else ''
+                self.get_logger().info(
+                    f'  Casilla {i}: "{name}" (conf: {conf:.2f}){marker}'
+                )
             if target_index >= 0:
                 self.get_logger().info(
                     f'"{self.target_object}" encontrado en casilla {target_index}'
