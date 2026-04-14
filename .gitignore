@@ -10,3 +10,14 @@
 auto_etiquetar_y_entrenar.py
 EJECUTAR_TODO.py
 label_keys.py
+
+# ROS2 workspace - generados por colcon build
+/build/
+/install/
+/log/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/

@@ -1,0 +1,11 @@
+camera_publisher_node:
+  ros__parameters:
+    camera_index: 0
+    fps: 30
+    width: 640
+    height: 480
+
+object_recognition_node:
+  ros__parameters:
+    model_path: "yolov8n.pt"
+    confidence: 0.5
