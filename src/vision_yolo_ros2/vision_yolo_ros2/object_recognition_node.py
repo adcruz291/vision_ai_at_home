@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from std_msgs.msg import String, Bool
+from std_msgs.msg import String
 from sensor_msgs.msg import Image
 from ultralytics import YOLO
 
@@ -63,7 +63,7 @@ class ObjectRecognitionNode(Node):
         self.create_subscription(
             String, '/target_object',    self.cb_target_object, 10)
         self.create_subscription(
-            Bool,   '/got_target',       self.cb_got_target,    10)
+            String, '/got_target',       self.cb_got_target,    10)
         self.create_subscription(
             Image,  '/camera/image_raw', self.cb_camera,        10)
 
@@ -123,9 +123,9 @@ class ObjectRecognitionNode(Node):
             f'Esperando confirmacion de navegacion (/got_target)...'
         )
 
-    def cb_got_target(self, msg: Bool):
-        """Recibe confirmacion del sistema de navegacion."""
-        if not msg.data:
+    def cb_got_target(self, msg: String):
+        """Recibe confirmacion del sistema de navegacion (keyword: 'done' o 'DONE')."""
+        if msg.data.strip().lower() != 'done':
             return
 
         if self.state != State.WAITING_NAVIGATION:
